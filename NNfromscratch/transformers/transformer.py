@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.testing._internal.distributed._tensor.common_dtensor import FeedForward
 
 
 class selfAttention(nn.Module):
@@ -98,5 +99,28 @@ class selfAttention(nn.Module):
         out.shape = (N, query_len, heads, head_dim)  - final sum output for each head for each sequence in a batch
         '''
 
-        out.reshape(N, query_len, self.heads * self.head_dim)
-        out = self.fc_out(out)  # concatenate all the final contextualised sums from each head into a final big embedding for each token in a batch
+        # concatenate the final contextualised output from all attention heads
+        # into a final big embedding for each token in a batch
+        out = out.reshape(N, query_len, self.heads * self.head_dim)
+        # apply a shared linear transformation (weights + bias) to each token embedding
+        # to recombine information from all heads and project back to embed_size
+        out = self.fc_out(out)
+        return out
+
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_size, heads, forward_expansion, dropout):
+        super(TransformerBlock, self).__init__()
+        self.attention = selfAttention(embed_size, heads)
+        self.norm1 = nn.LayerNorm(embed_size)  # layer norm normalises for every sequence across its tokens
+        self.norm2 = nn.LayerNorm(embed_size)
+
+        self.feed_forward = nn.Sequential(
+            nn.Linear(embed_size, forward_expansion * embed_size),
+            nn.ReLU(),
+            nn.Linear(forward_expansion * embed_size, embed_size)
+        )
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, value, key, query, mask):
+        attention = self.attention(value, key, query, mask)
