@@ -112,15 +112,59 @@ class TransformerBlock(nn.Module):
         super(TransformerBlock, self).__init__()
         self.attention = selfAttention(embed_size, heads)
         self.norm1 = nn.LayerNorm(embed_size)  # layer norm normalises for every sequence across its tokens
-        self.norm2 = nn.LayerNorm(embed_size)
+        self.norm2 = nn.LayerNorm(embed_size)  # z = (x - μ) / σ
 
         self.feed_forward = nn.Sequential(
             nn.Linear(embed_size, forward_expansion * embed_size),
             nn.ReLU(),
             nn.Linear(forward_expansion * embed_size, embed_size)
-        )
+        )  # feed forward layer that has a bigger hidden layer - gives the model nonlinear capacity
 
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, value, key, query, mask):
         attention = self.attention(value, key, query, mask)
+        x = self.dropout(self.norm1(attention + query))  # add and normalise like the original paper
+        forward = self.feed_forward(x)
+        out = self.dropout(self.norm2(forward + x))
+
+        return out
+
+class Encoder(nn.Module):
+    def __init__(self,
+                 src_vocab_size,
+                 embed_size,
+                 num_layers,
+                 heads,
+                 device,
+                 forward_expansion,
+                 dropout,
+                 max_length
+        ):
+        super(Encoder, self).__init__()
+        self.embed_size = embed_size
+        self.device = device
+        self.word_embedding = nn.Embedding(src_vocab_size, embed_size)
+        self.position_embedding = nn.Embedding(max_length, embed_size)
+
+        self.layers = nn.ModuleList([
+            TransformerBlock(embed_size, heads, forward_expansion=forward_expansion, dropout=dropout)
+
+        ])
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, mask):
+        N, seq_length = x.shape
+        positions = torch.arange(0, seq_length).expand(N, seq_length).to(self.device)
+
+        embed_w_time_signal = self.word_embedding(x) + self.position_embedding(positions)
+        out = self.dropout(embed_w_time_signal)
+
+        for layer in self.layers:
+            out = layer(out, out, out, mask)
+
+        return out
+
+# The encoder learns contextual representations; the decoder uses them as keys and values during cross-attention.
+# Encoder - Understand the input sentence.
+# Decoder - At each step, ask the encoder: what parts of the input matter for my next word?
