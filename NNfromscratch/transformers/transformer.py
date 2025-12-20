@@ -13,6 +13,12 @@ class selfAttention(nn.Module):
         assert(self.head_dim * self.heads == embed_size),"embed_size must be divisible by heads"
 
 
+        '''
+        Q K V are calculated on every forward pass for each embedding (token)
+        by applying three learned linear projections to each input token embedding
+        these weights will change across batches as they are updated during backpropagation 
+        '''
+
         # values = what information is stored in each token (its significance varies to different tokens depending on its attention score)
         self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)  # original paper doesn't use bias - all it does is complicate the maths
 
@@ -24,6 +30,7 @@ class selfAttention(nn.Module):
 
         # concatenates all outputs of each head back to the dimensions of the embeddings
         self.fc_out = nn.Linear(self.heads*self.head_dim, self.embed_size)
+
 
 
 
@@ -149,7 +156,6 @@ class Encoder(nn.Module):
 
         self.layers = nn.ModuleList([
             TransformerBlock(embed_size, heads, forward_expansion=forward_expansion, dropout=dropout)
-
         ])
         self.dropout = nn.Dropout(dropout)
 
