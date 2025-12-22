@@ -5,6 +5,8 @@ from torch.testing._internal.distributed._tensor.common_dtensor import FeedForwa
 
 class selfAttention(nn.Module):
     def __init__(self, embed_size, heads):
+
+        # child class of nn.Modules from torch to manage parameters, gradients, and devices correctly
         super(selfAttention, self).__init__()
         self.embed_size = embed_size
         self.heads = heads
@@ -143,7 +145,7 @@ class Encoder(nn.Module):
                  embed_size,
                  num_layers,
                  heads,
-                 device,
+                 device,  # CPU or GPU used for torch. Specifies where tensors and model parameters are stored
                  forward_expansion,
                  dropout,
                  max_length
@@ -151,25 +153,75 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.embed_size = embed_size
         self.device = device
+
+        # creates a matrix that maps a token to an embedding in each row
+        # updated via backpropagation during training to better capture relationship between tokens
         self.word_embedding = nn.Embedding(src_vocab_size, embed_size)
+        # creates a matrix that maps each position to a vector in each row
+        # this is learned positional embeddings - original paper uses sinusoidal embeddings
         self.position_embedding = nn.Embedding(max_length, embed_size)
 
-        self.layers = nn.ModuleList([
+        self.layers = nn.ModuleList([  # define number of transformer inside each encoder
             TransformerBlock(embed_size, heads, forward_expansion=forward_expansion, dropout=dropout)
+            # for _ in range(num_layers)
         ])
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
-        N, seq_length = x.shape
+        N, seq_length = x.shape  # x contains token IDs for the embeddings not the embeddings themselves
+        # create position indices (0, 1, 2, ...) to assign positional embeddings to the correct index later
         positions = torch.arange(0, seq_length).expand(N, seq_length).to(self.device)
 
+        # combine word meaning and positional information for each token
         embed_w_time_signal = self.word_embedding(x) + self.position_embedding(positions)
-        out = self.dropout(embed_w_time_signal)
+        out = self.dropout(embed_w_time_signal)  # prevents over-reliance on certain dimensions of the embedding
 
-        for layer in self.layers:
+        for layer in self.layers:  # go through all layers (transformers) in the encoder
             out = layer(out, out, out, mask)
 
         return out
+
+class DecoderBlock(nn.Module):
+    def __init__(self, embed_size, heads, forward_expansion, dropout, device):
+        super(DecoderBlock, self).__init__()
+        self.attention = selfAttention(embed_size, heads)
+        self.norm = nn.LayerNorm(embed_size)
+        self.transformer = TransformerBlock(embed_size, heads, forward_expansion, dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, value, key, query, src_mask, trg_mask):  # src_mask to block the padded tokens
+        attention = self.attention(x, x, x, trg_mask)
+        query = self.dropout(self.norm(attention + x))
+        out = self.transformer(value, key, query, src_mask)
+        return out
+
+class Decoder(nn.Module):
+    def __init__(self, trg_vocab_size, embed_size, num_layers, max_length, heads, forward_expansion, dropout, device):
+        super(Decoder).__init__()
+        self.word_embedding = nn.Embedding(trg_vocab_size, embed_size)
+        self.position_embedding = nn.Embedding(max_length, embed_size)
+        self.layers = nn.ModuleList([
+            DecoderBlock(embed_size, heads, forward_expansion, dropout, device)
+            for _ in range(num_layers)
+        ])
+
+        self.fc_out = nn.Linear(embed_size, trg_vocab_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, enc_out, src_mask, trg_mask):
+        N, seq_length = x.shape
+        positions = torch.arange(0, seq_length).expand(N, seq_length).to(self.device)
+        x = self.dropout(self.word_embedding(x) + self.position_embedding(positions))
+
+        for layers in self.layers:
+            x = layers(x, enc_out, enc_out, src_mask, trg_mask)
+
+        out = self.fc_out(x)
+
+
+
+
+
 
 # The encoder learns contextual representations; the decoder uses them as keys and values during cross-attention.
 # Encoder - Understand the input sentence.
