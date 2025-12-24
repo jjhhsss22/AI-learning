@@ -163,7 +163,7 @@ class Encoder(nn.Module):
 
         self.layers = nn.ModuleList([  # define number of transformer inside each encoder
             TransformerBlock(embed_size, heads, forward_expansion=forward_expansion, dropout=dropout)
-            # for _ in range(num_layers)
+            for _ in range(num_layers)
         ])
         self.dropout = nn.Dropout(dropout)
 
@@ -184,27 +184,42 @@ class Encoder(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, embed_size, heads, forward_expansion, dropout, device):
         super(DecoderBlock, self).__init__()
-        self.attention = selfAttention(embed_size, heads)
+        self.attention = selfAttention(embed_size, heads)  # masked self attention (decoder cannot see future tokens)
         self.norm = nn.LayerNorm(embed_size)
+        # reuse transformer block for cross-attention (query from decoder, key & value from encoder)
         self.transformer = TransformerBlock(embed_size, heads, forward_expansion, dropout)
         self.dropout = nn.Dropout(dropout)
+        self.device = device
 
-    def forward(self, x, value, key, query, src_mask, trg_mask):  # src_mask to block the padded tokens
-        attention = self.attention(x, x, x, trg_mask)
+    # src_mask to block the padded tokens
+    # trg_mask to block future tokens and process the whole sequence in parallel during training
+    def forward(self, x, value, key, query, src_mask, trg_mask):
+        attention = self.attention(x, x, x, trg_mask)  # looks at everything the decoder has generated so far
         query = self.dropout(self.norm(attention + x))
+        # aims to determine which tokens from the source matter for the next word
         out = self.transformer(value, key, query, src_mask)
         return out
 
 class Decoder(nn.Module):
     def __init__(self, trg_vocab_size, embed_size, num_layers, max_length, heads, forward_expansion, dropout, device):
-        super(Decoder).__init__()
+        super(Decoder, self).__init__()
         self.word_embedding = nn.Embedding(trg_vocab_size, embed_size)
         self.position_embedding = nn.Embedding(max_length, embed_size)
+
+        '''
+        in each decoder block
+        1. masked self-attention on target sequence (up to current token)
+           the decoder runs self-attention up to the current token at each time step 
+           (parallel with masking in training)
+        2. cross-attention
+        3. feed forward with forward expansion
+        '''
         self.layers = nn.ModuleList([
             DecoderBlock(embed_size, heads, forward_expansion, dropout, device)
             for _ in range(num_layers)
         ])
 
+        # Converts final embeddings → logits over vocabulary
         self.fc_out = nn.Linear(embed_size, trg_vocab_size)
         self.dropout = nn.Dropout(dropout)
 
