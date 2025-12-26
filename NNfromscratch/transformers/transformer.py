@@ -25,7 +25,7 @@ class selfAttention(nn.Module):
         self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)  # original paper doesn't use bias - all it does is complicate the maths
 
         # keys = how each token presents itself to tokens (including itself)
-        self.key = nn.Linear(self.head_dim, self.head_dim, bias=False)
+        self.keys = nn.Linear(self.head_dim, self.head_dim, bias=False)
 
         # queries = how much does each token (including itself) matter to the CURRENT token
         self.queries = nn.Linear(self.head_dim, self.head_dim, bias=False)
@@ -44,6 +44,10 @@ class selfAttention(nn.Module):
         values = values.reshape(N, value_len, self.heads, self.head_dim)
         keys = key.reshape(N, key_len, self.heads, self.head_dim)
         queries = query.reshape(N, query_len, self.heads, self.head_dim)
+
+        values = self.values(values)
+        keys = self.keys(keys)
+        queries = self.queries(queries)
 
         energy = torch.einsum('nqhd,nkhd->nhqk', [queries, keys])
         '''
@@ -193,7 +197,7 @@ class DecoderBlock(nn.Module):
 
     # src_mask to block the padded tokens
     # trg_mask to block future tokens and process the whole sequence in parallel during training
-    def forward(self, x, value, key, query, src_mask, trg_mask):
+    def forward(self, x, value, key, src_mask, trg_mask):
         attention = self.attention(x, x, x, trg_mask)  # looks at everything the decoder has generated so far
         query = self.dropout(self.norm(attention + x))
         # aims to determine which tokens from the source matter for the next word
@@ -203,6 +207,7 @@ class DecoderBlock(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, trg_vocab_size, embed_size, num_layers, max_length, heads, forward_expansion, dropout, device):
         super(Decoder, self).__init__()
+        self.device = device
         self.word_embedding = nn.Embedding(trg_vocab_size, embed_size)
         self.position_embedding = nn.Embedding(max_length, embed_size)
 
@@ -232,11 +237,83 @@ class Decoder(nn.Module):
             x = layers(x, enc_out, enc_out, src_mask, trg_mask)
 
         out = self.fc_out(x)
+        return out
+
+class Transformer(nn.Module):
+    def __init__(self,
+                 src_vocab_size,
+                 trg_vocab_size,
+                 src_pad_idx,
+                 trg_pad_idx,
+                 embed_size=256,
+                 num_layers=6,
+                 heads=8,
+                 forward_expansion=4,
+                 dropout=0,
+                 device="cpu",
+                 max_length=100,
+             ):
+        super(Transformer, self).__init__()
+
+        self.encoder = Encoder(src_vocab_size,
+                               embed_size,
+                               num_layers,
+                               heads,
+                               device,
+                               forward_expansion,
+                               dropout,
+                               max_length
+            )
+
+        self.decoder = Decoder(trg_vocab_size,
+                               embed_size,
+                               num_layers,
+                               max_length,
+                               heads,
+                               forward_expansion,
+                               dropout,
+                               device
+            )
+
+        self.src_pad_idx = src_pad_idx
+        self.trg_pad_idx = trg_pad_idx
+        self.device = device
+
+    def make_src_mask(self, src_seq):
+        # shape = (N, 1, 1, src_len)
+        src_mask = (src_seq != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
+
+        return src_mask.to(self.device)
+
+    def make_trg_mask(self, trg_seq):
+        N, trg_len = trg_seq.shape
+        trg_mask = torch.tril(torch.ones((trg_len, trg_len))).expand(N, 1, trg_len, trg_len)
+
+        return trg_mask.to(self.device)
+
+    def forward(self, src_seq, trg_seq):
+        src_mask = self.make_src_mask(src_seq)
+        trg_mask = self.make_trg_mask(trg_seq)
+
+        enc_src = self.encoder(src_seq, src_mask)
+        out = self.decoder(trg_seq, enc_src, src_mask, trg_mask)
+        return out
 
 
+if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    x = torch.tensor([[1, 5, 6, 4, 3, 9, 5, 2, 0], [1, 8, 7, 3, 4, 5, 6, 7, 2]]).to(device)
+    trg = torch.tensor([[1, 7, 4, 3, 5, 9, 2, 0], [1, 5, 6, 2, 4, 7, 6, 2]]).to(device)
 
+    src_pad_idx = 0
+    trg_pad_idx = 0
+    src_vocab_size = 10
+    trg_vocab_size = 10
+    model = Transformer(src_vocab_size, trg_vocab_size, src_pad_idx, trg_pad_idx).to(device)
 
+    out = model(x, trg[:, :-1])
+    print(out.shape)
 
 # The encoder learns contextual representations; the decoder uses them as keys and values during cross-attention.
 # Encoder - Understand the input sentence.
