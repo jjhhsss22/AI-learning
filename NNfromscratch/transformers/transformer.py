@@ -280,7 +280,7 @@ class Transformer(nn.Module):
         Encoder - Understand the input sentence
         Decoder - At each step, ask the encoder: what parts of the input matter for my next word?
         """
-        
+
         self.encoder = Encoder(src_vocab_size,
                                embed_size,
                                num_layers,
@@ -321,7 +321,7 @@ class Transformer(nn.Module):
         # padding mask just line for source to account for padding
         # triangular lower target casual mask to ensure no future information leakage
         pad_mask = (trg_seq != trg_pad_idx).unsqueeze(1).unsqueeze(2)
-        causal_mask = torch.tril(torch.ones((trg_len, trg_len))).to(device)
+        causal_mask = torch.tril(torch.ones((trg_len, trg_len), device=trg_seq.device)).bool()
 
         trg_mask = pad_mask & causal_mask  # AND them because token needs to be valid in both masks
         return trg_mask # shape = (N, 1, trg_len, trg_len)
@@ -355,4 +355,4 @@ if __name__ == '__main__':
     model = Transformer(src_vocab_size, trg_vocab_size, src_pad_idx, trg_pad_idx).to(device)
 
     out = model(x, trg[:, :-1])
-    print(out.shape)
+    print(out.shape)  # final output is tensor(2, 7, 10) which is the correct shape
