@@ -1,5 +1,5 @@
 numpy==2.3.5
 tensorflow==2.20.0
 matplotlib==3.10.8
-torch==2.9.1
+torch==2.9.1+cu130
 expecttest===0.3.0

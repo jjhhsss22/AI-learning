@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.testing._internal.distributed._tensor.common_dtensor import FeedForward
-
 
 class selfAttention(nn.Module):
     def __init__(self, embed_size, heads):
@@ -15,11 +13,11 @@ class selfAttention(nn.Module):
         assert(self.head_dim * self.heads == embed_size),"embed_size must be divisible by heads"
 
 
-        '''
+        """
         Q K V are calculated on every forward pass for each embedding (token)
         by applying three learned linear projections to each input token embedding
         these weights will change across batches as they are updated during backpropagation 
-        '''
+        """
 
         # values = what information is stored in each token (its significance varies to different tokens depending on its attention score)
         self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)  # original paper doesn't use bias - all it does is complicate the maths
@@ -50,7 +48,7 @@ class selfAttention(nn.Module):
         queries = self.queries(queries)
 
         energy = torch.einsum('nqhd,nkhd->nhqk', [queries, keys])
-        '''
+        """
         n	batch
         q	query position
         k	key position
@@ -69,11 +67,11 @@ class selfAttention(nn.Module):
         ALL batches, ALL heads, and ALL query–key pairs.
         
         energy shape = (batch, heads, query_len, key_len)
-        '''
+        """
 
 
         if mask is not None:
-            '''
+            """
             turn values that need to be masked to -inf.
             so that when softmax is applied on them, it will return 0.
             
@@ -81,21 +79,21 @@ class selfAttention(nn.Module):
             so that decoder can't see future tokens and attempt to make predictions instead
             or
             padding tokens
-            '''
+            """
             energy = energy.masked_fill(mask == 0, float("-1e20"))
 
         scaled_energy = energy / (self.head_dim ** 0.5)
-        '''
+        """
         dot product grows with dimension
         so softmax can become 'peaky' and gradients will vanish
         in the original paper, scaling resolves this issue by keeping dot products in a reasonable range 
-        '''
+        """
 
         attention = torch.softmax(scaled_energy, dim=3)  # dim=3 represents the dim of keys so performs softmax for each query
         # now each row sums up to 1 -> Σ attention[n,h,q,k] = 1 (for each batch, each head, each query, distribute attention across keys)
 
         out = torch.einsum("nhql,nlhd->nqhd", [attention, values])
-        '''
+        """
         this einsum operation multiplies attention weights with their corresponding value vectors,
         producing a weighted sum over ALL keys for EACH query token and EACH head.
         
@@ -110,7 +108,7 @@ class selfAttention(nn.Module):
         attention.shape = (N, heads, query_len, key_len)
         values.shape    = (N, key_len, heads, head_dim)
         out.shape = (N, query_len, heads, head_dim)  - final sum output for each head for each sequence in a batch
-        '''
+        """
 
         # concatenate the final contextualised output from all attention heads
         # into a final big embedding for each token in a batch
@@ -118,7 +116,7 @@ class selfAttention(nn.Module):
         # apply a shared linear transformation (weights + bias) to each token embedding
         # to recombine information from all heads and project back to embed_size
         out = self.fc_out(out)
-        return out
+        return out  # shape = (N, src_len, embed_size)
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_size, heads, forward_expansion, dropout):
@@ -183,7 +181,7 @@ class Encoder(nn.Module):
         for layer in self.layers:  # go through all layers (transformers) in the encoder
             out = layer(out, out, out, mask)
 
-        return out
+        return out  # shape = (N, src_len, embed_size)
 
 class DecoderBlock(nn.Module):
     def __init__(self, embed_size, heads, forward_expansion, dropout, device):
@@ -196,13 +194,30 @@ class DecoderBlock(nn.Module):
         self.device = device
 
     # src_mask to block the padded tokens
-    # trg_mask to block future tokens and process the whole sequence in parallel during training
+    # trg_mask to block padded tokens and future tokens and process the whole sequence in parallel during training
     def forward(self, x, value, key, src_mask, trg_mask):
-        attention = self.attention(x, x, x, trg_mask)  # looks at everything the decoder has generated so far
-        query = self.dropout(self.norm(attention + x))
-        # aims to determine which tokens from the source matter for the next word
+        # looks at everything the decoder has generated so far
+        # within the layer, it also has Q K V values which are also learned
+        attention = self.attention(x, x, x, trg_mask)
+        query = self.dropout(self.norm(attention + x))  # shape = (N, trg_len, embed_size)
+        """
+        cross-attention:
+        aims to determine which tokens from the source matter for the next word
+        
+        keys & values:
+        the KEYS and VALUES ARE NOT ACTUALLY REUSED from the encoder
+        the decoder derives keys and values from the encoder’s output using learned linear layers
+        that is why we say we use keys and values from the encoder
+        because we use contextualised embeddings from the encoder as input
+        
+        query:
+        similarly, the QUERY is not reused from the self-attention layer in the decoder
+        it is derived by using a learned linear projection
+        the input is the contextualised embeddings for the (current) target sequence 
+        that is why we say the query is from the self-attention layer
+        """
         out = self.transformer(value, key, query, src_mask)
-        return out
+        return out   # shape = (N, trg_len, embed_size)
 
 class Decoder(nn.Module):
     def __init__(self, trg_vocab_size, embed_size, num_layers, max_length, heads, forward_expansion, dropout, device):
@@ -211,14 +226,17 @@ class Decoder(nn.Module):
         self.word_embedding = nn.Embedding(trg_vocab_size, embed_size)
         self.position_embedding = nn.Embedding(max_length, embed_size)
 
-        '''
+        """
         in each decoder block
-        1. masked self-attention on target sequence (up to current token)
-           the decoder runs self-attention up to the current token at each time step 
+        1. masked self-attention on target sequence shifted right (up to current token)
+           the decoder runs self-attention up to the current token at each time step to predict next token
            (parallel with masking in training)
         2. cross-attention
         3. feed forward with forward expansion
-        '''
+        
+        During inference, the decoder generates the target sequence autoregressively starting from <START> token
+        by repeatedly feeding back previously generated tokens until an <END> token is produced.
+        """
         self.layers = nn.ModuleList([
             DecoderBlock(embed_size, heads, forward_expansion, dropout, device)
             for _ in range(num_layers)
@@ -237,7 +255,7 @@ class Decoder(nn.Module):
             x = layers(x, enc_out, enc_out, src_mask, trg_mask)
 
         out = self.fc_out(x)
-        return out
+        return out  # shape = (N, trg_len, trg_vocab_size) logit over possible vocabulary
 
 class Transformer(nn.Module):
     def __init__(self,
@@ -250,11 +268,19 @@ class Transformer(nn.Module):
                  heads=8,
                  forward_expansion=4,
                  dropout=0,
-                 device="cpu",
+                 device="cuda",
                  max_length=100,
              ):
-        super(Transformer, self).__init__()
+        super(Transformer, self).__init__()\
 
+        """
+        the encoder learns contextual representations
+        the decoder uses them as keys and values during cross-attention
+        
+        Encoder - Understand the input sentence
+        Decoder - At each step, ask the encoder: what parts of the input matter for my next word?
+        """
+        
         self.encoder = Encoder(src_vocab_size,
                                embed_size,
                                num_layers,
@@ -280,18 +306,34 @@ class Transformer(nn.Module):
         self.device = device
 
     def make_src_mask(self, src_seq):
-        # shape = (N, 1, 1, src_len)
+        """
+        prevent padding from affecting attention
+        shape = (N, 1, 1, src_len)
+        we need it to be that shape because attention works in 4D
+        and torch will broadcast (apply the same mask) to each partial embedding (N, heads, query_len, key_len)
+        """
         src_mask = (src_seq != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
 
         return src_mask.to(self.device)
 
     def make_trg_mask(self, trg_seq):
         N, trg_len = trg_seq.shape
-        trg_mask = torch.tril(torch.ones((trg_len, trg_len))).expand(N, 1, trg_len, trg_len)
+        # padding mask just line for source to account for padding
+        # triangular lower target casual mask to ensure no future information leakage
+        pad_mask = (trg_seq != trg_pad_idx).unsqueeze(1).unsqueeze(2)
+        causal_mask = torch.tril(torch.ones((trg_len, trg_len))).to(device)
 
-        return trg_mask.to(self.device)
+        trg_mask = pad_mask & causal_mask  # AND them because token needs to be valid in both masks
+        return trg_mask # shape = (N, 1, trg_len, trg_len)
 
     def forward(self, src_seq, trg_seq):
+        """
+        every forward call interation (per batch) creates new masks
+        Source mask applied whenever encoder outputs are used as keys/values
+        Target mask applied during decoder self-attention over target sequence (uses decoder K/V values)
+
+        However, for inference, the target mask is recalculated after each forward call as the trg_len changes
+        """
         src_mask = self.make_src_mask(src_seq)
         trg_mask = self.make_trg_mask(trg_seq)
 
@@ -314,7 +356,3 @@ if __name__ == '__main__':
 
     out = model(x, trg[:, :-1])
     print(out.shape)
-
-# The encoder learns contextual representations; the decoder uses them as keys and values during cross-attention.
-# Encoder - Understand the input sentence.
-# Decoder - At each step, ask the encoder: what parts of the input matter for my next word?
