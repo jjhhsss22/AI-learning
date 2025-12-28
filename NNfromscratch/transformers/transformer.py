@@ -345,14 +345,55 @@ class Transformer(nn.Module):
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Source batch (N=2 sequences, src_len=9)
+    # 0 is PAD token
     x = torch.tensor([[1, 5, 6, 4, 3, 9, 5, 2, 0], [1, 8, 7, 3, 4, 5, 6, 7, 2]]).to(device)
+    # Target batch (N=2 sequences, trg_len=8)
     trg = torch.tensor([[1, 7, 4, 3, 5, 9, 2, 0], [1, 5, 6, 2, 4, 7, 6, 2]]).to(device)
 
+    # Padding indices (used for masking)
     src_pad_idx = 0
     trg_pad_idx = 0
+
+    # Vocabulary sizes (number of possible words the model can represent)
     src_vocab_size = 10
     trg_vocab_size = 10
+
     model = Transformer(src_vocab_size, trg_vocab_size, src_pad_idx, trg_pad_idx).to(device)
 
+    """
+    x = (src_seq), trg = (trg_seq)
+    so if target is [BOS, t1, t2, t3, EOS]
+    decoder sees [BOS, t1, t2, t3]
+    and predicts [w1, w2, w3, EOS]
+    
+    so the correct shape (N, trg_len - 1, trg_vocab_size)
+    the final output represents logits over vocabulary for the NEXT token
+    these logits are later passed to Cross Entropy Loss for backpropagation
+    """
     out = model(x, trg[:, :-1])
-    print(out.shape)  # final output is tensor(2, 7, 10) which is the correct shape
+    print(out.shape)  # final output is tensor(2, 7, 10)
+
+
+"""
+This code defines a full encoder–decoder Transformer architecture
+and performs a single forward pass that produces logits for the next target tokens
+given a batch of source and shifted target sequences.
+ 
+The output probabilities would be mostly random as no training occurred yet.
+It has no training loops, loss computation, no optimizer, and no backpropagation
+
+In order to actually train this transformer, you would need something like:
+
+criterion = nn.CrossEntropyLoss(ignore_index=trg_pad_idx)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+for src, trg in dataloader:
+    ...
+    output = output.reshape(-1, output.shape[-1])
+    trg_y = trg[:, 1:].reshape(-1)
+    
+    loss = criterion(output, trg_y)
+    loss.backward()
+    optimizer.step()
+"""
