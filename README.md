@@ -33,9 +33,13 @@ cd NNfromscratch/transformers && python transformer.py
 
 ## What I took away
 
-- **Backpropagation is just the chain rule, applied carefully.** Writing gradients by hand for convolution and pooling made it clear why frameworks cache forward-pass values.
-- **Why RNNs struggle with long sequences.** Backpropagation through time multiplies gradients across steps, so they vanish or explode, which is the problem attention removes.
-- **Attention is a weighted lookup.** Queries score keys, softmax turns the scores into weights, and those weights mix the values. Masking stops the decoder from seeing future tokens.
+Notes drawn from the comments I wrote while building each model:
+
+- **Max-pooling backprop is sparse.** The gradient only flows back to the position that held the max value in each 2×2 window. Every other position gets zero, because it didn't contribute to the output (`maxpool.py`).
+- **RNN gradients need clipping.** Backpropagation through time multiplies by `Whh` at every step, so gradients can explode or vanish. I clip them to [-1, 1] to keep them from reaching extremes (`rnn.py`).
+- **Why attention is scaled by √dₖ.** Dot products grow with dimension, which makes softmax "peaky" and its gradients vanish. Dividing by √dₖ keeps the scores in a usable range (`transformer.py`).
+- **Masking happens before softmax.** Masked scores are set to −∞ so softmax turns them into exactly zero. The decoder ANDs a padding mask with a lower-triangular causal mask, so a token is only attended to if it isn't padding and isn't in the future (`transformer.py`).
+- **Cross-attention doesn't literally reuse the encoder's keys and values.** The decoder derives its own K and V from the encoder's output through learned linear projections. "From the encoder" means the input, not the tensors themselves.
 
 ## References
 
